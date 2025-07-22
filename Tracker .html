@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>路線追蹤記錄器</title>
+    <title>智能容錯版記錄器 (v7)</title>
     
     <!-- Leaflet.js 地圖函式庫 -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -70,7 +70,7 @@
 
     <div class="header">
         <div class="container">
-            <h1>路線追蹤記錄器</h1>
+            <h1>智能容錯版記錄器 (v7)</h1>
             <div class="controls">
                 <button id="trackingBtn" class="btn btn-start">開始追蹤</button>
                 <button id="markStopBtn" class="btn btn-mark" disabled>標記停留</button>
@@ -147,34 +147,46 @@
         function toggleManualStop(isEndingSession = false) {
             if (!isTracking) return;
 
-            if (!isCurrentlyStopped) { // 開始停留
+            if (!isCurrentlyStopped) { // *** 開始停留 (v7 智能容錯版) ***
                 markStopBtn.disabled = true;
                 markStopBtn.textContent = '定位中...';
-                addLog({ type: '系統', message: '正在獲取停留點位置...' }, 'info');
+                
+                const handleSuccess = (pos) => {
+                    isCurrentlyStopped = true;
+                    statusSpan.textContent = '狀態: 停留中';
+                    markStopBtn.textContent = '結束停留';
+                    markStopBtn.disabled = false;
 
-                navigator.geolocation.getCurrentPosition(
-                    (pos) => {
-                        isCurrentlyStopped = true;
-                        statusSpan.textContent = '狀態: 停留中';
-                        markStopBtn.textContent = '結束停留';
-                        markStopBtn.disabled = false;
+                    const { latitude, longitude } = pos.coords;
+                    manualStopInfo = { lat: latitude, lng: longitude, startTime: new Date(), stopIndex: logData.filter(l => l.type === '停留結束').length + 1 };
+                    const log = { type: '停留開始', time: manualStopInfo.startTime, lat: latitude, lng: longitude };
+                    addLog(log, 'stop-start');
+                    manualStopInfo.marker = L.marker([latitude, longitude]).addTo(map)
+                        .bindPopup(`<b>停留點 ${manualStopInfo.stopIndex} (進行中)</b><br>開始: ${formatTime(manualStopInfo.startTime)}`).openPopup();
+                    map.panTo([latitude, longitude]);
+                };
 
-                        const { latitude, longitude } = pos.coords;
-                        manualStopInfo = { lat: latitude, lng: longitude, startTime: new Date(), stopIndex: logData.filter(l => l.type === '停留結束').length + 1 };
-                        const log = { type: '停留開始', time: manualStopInfo.startTime, lat: latitude, lng: longitude };
-                        addLog(log, 'stop-start');
-                        manualStopInfo.marker = L.marker([latitude, longitude]).addTo(map)
-                            .bindPopup(`<b>停留點 ${manualStopInfo.stopIndex} (進行中)</b><br>開始: ${formatTime(manualStopInfo.startTime)}`).openPopup();
-                        map.panTo([latitude, longitude]);
-                    },
+                const handleError = (err) => {
+                    addLog({ type: '錯誤', message: `最終無法獲取位置: ${err.message}` }, 'error');
+                    markStopBtn.disabled = false;
+                    markStopBtn.textContent = '標記停留';
+                };
+
+                // 步驟 1: 優先嘗試高精度定位，超時 7 秒
+                addLog({ type: '系統', message: '正在嘗試高精度定位...' }, 'info');
+                navigator.geolocation.getCurrentPosition(handleSuccess, 
                     (err) => {
-                        addLog({ type: '錯誤', message: `無法獲取停留點位置: ${err.message}` }, 'error');
-                        markStopBtn.disabled = false;
-                        markStopBtn.textContent = '標記停留';
-                    },
-                    { enableHighAccuracy: true, timeout: 10000 }
+                        addLog({ type: '系統', message: `高精度失敗(${err.message})，降級重試...` }, 'info');
+                        // 步驟 2: 如果失敗，自動降級，使用普通精度再次嘗試，超時 10 秒
+                        navigator.geolocation.getCurrentPosition(handleSuccess, handleError, {
+                            enableHighAccuracy: false,
+                            timeout: 10000
+                        });
+                    }, 
+                    { enableHighAccuracy: true, timeout: 7000 }
                 );
-            } else { // 結束停留
+
+            } else { // 結束停留 (邏輯不變)
                 const endTime = new Date();
                 const durationMs = endTime - manualStopInfo.startTime;
                 const durationStr = formatDuration(durationMs);
@@ -194,22 +206,19 @@
             }
         }
 
-        // *** 核心修正：handlePositionUpdate ***
         function handlePositionUpdate(position) {
             const { latitude, longitude } = position.coords;
             const now = new Date();
             const point = { lat: latitude, lng: longitude, time: now };
 
-            // 1. 無論如何，都更新底層數據和地圖顯示
-            coordControl.update(latitude, longitude); // 更新實時座標
+            coordControl.update(latitude, longitude);
             if (trackPoints.length === 0) {
                 logList.innerHTML = '';
                 map.setView([latitude, longitude], 16);
             }
-            trackPoints.push(point); // 存儲數據點
-            updateMap(); // 更新地圖軌跡線
+            trackPoints.push(point);
+            updateMap();
 
-            // 2. 只有在非停留狀態下，才在UI上新增「移動」日誌
             if (!isCurrentlyStopped) {
                 addLog({ type: '移動', time: now, lat: latitude, lng: longitude });
             }
@@ -268,7 +277,7 @@
         }
         function exportGPX() {
             let gpxContent = `<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="Continuous Tracker v6" xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">\n`;
+<gpx version="1.1" creator="Smart Fallback Tracker v7" xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">\n`;
             logData.filter(log => log.type === '停留結束').forEach(log => {
                 gpxContent += `  <wpt lat="${log.lat}" lon="${log.lng}">\n`;
                 gpxContent += `    <time>${log.startTime.toISOString()}</time>\n`;
@@ -296,7 +305,7 @@
             if (!polyline) {
                 polyline = L.polyline(pathPoints, { color: 'blue' }).addTo(map);
             } else { polyline.setLatLngs(pathPoints); }
-            if (trackPoints.length > 0) {
+            if (trackPoints.length > 0 && !isCurrentlyStopped) {
                 map.panTo(pathPoints[pathPoints.length - 1]);
             }
         }
