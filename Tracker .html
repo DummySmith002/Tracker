@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>專業版軌跡記錄工具</title>
+    <title>不間斷追蹤版記錄器</title>
     
     <!-- Leaflet.js 地圖函式庫 -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -31,20 +31,20 @@
         .controls { display: flex; gap: 10px; }
         .btn {
             padding: 10px 15px; font-size: 14px; border: none; border-radius: 5px;
-            cursor: pointer; transition: background-color 0.3s; color: white;
+            cursor: pointer; transition: background-color 0.3s, color 0.3s; color: white;
             font-weight: bold; white-space: nowrap;
         }
         .btn-start { background-color: var(--start-bg); }
         .btn-stop { background-color: var(--stop-bg); }
         .btn-mark { background-color: var(--mark-bg); color: var(--mark-text); }
-        .btn:disabled { background-color: #6c757d; cursor: not-allowed; }
+        .btn:disabled { background-color: #6c757d; color: #fff; cursor: not-allowed; opacity: 0.7; }
         
         #map { flex-grow: 1; width: 100%; z-index: 1; background: #ddd; }
         
         .info-panel {
             height: 35%; max-height: 280px; background-color: #fff;
             overflow-y: auto; padding: 15px; border-top: 1px solid #ddd;
-            box-sizing: border-box; flex-shrink: 0; display: flex; flex-direction: column;
+            box-sizing: border-box; display: flex; flex-direction: column;
         }
         .info-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;}
         h2 { margin: 0; font-size: 18px; }
@@ -55,17 +55,14 @@
         #logList li.stop-start { background-color: #fff3cd; color: #664d03; }
         #logList li.stop-end { background-color: #d1e7dd; font-weight: bold; color: #0f5132; }
         #logList li.info { background-color: #e2e3e5; text-align: center; font-style: italic; }
+        #logList li.error { background-color: #f8d7da; color: #842029; text-align: center; }
         
         #exportControls { display: none; gap: 8px; flex-wrap: wrap; }
         .export-btn { background-color: var(--primary-color); font-size: 12px; padding: 8px 12px;}
         
-        /* 座標顯示控制項樣式 */
         .leaflet-control-coordinates {
-            background: rgba(255, 255, 255, 0.7);
-            padding: 5px;
-            border-radius: 4px;
-            font-family: 'Courier New', Courier, monospace;
-            font-size: 12px;
+            background: rgba(255, 255, 255, 0.7); padding: 5px; border-radius: 4px;
+            font-family: 'Courier New', Courier, monospace; font-size: 12px;
         }
     </style>
 </head>
@@ -73,7 +70,7 @@
 
     <div class="header">
         <div class="container">
-            <h1>專業版軌跡記錄器</h1>
+            <h1>不間斷追蹤版記錄器</h1>
             <div class="controls">
                 <button id="trackingBtn" class="btn btn-start">開始追蹤</button>
                 <button id="markStopBtn" class="btn btn-mark" disabled>標記停留</button>
@@ -118,7 +115,6 @@
                 attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             }).addTo(map);
 
-            // 新增：實時座標顯示控制項
             const CoordinatesControl = L.Control.extend({
                 onAdd: function(map) {
                     const container = L.DomUtil.create('div', 'leaflet-control-coordinates');
@@ -137,32 +133,47 @@
 
         // --- 核心功能 ---
         function toggleTracking() {
-            if (!isTracking) { // 開始
+            if (!isTracking) {
                 if (!navigator.geolocation) { return alert("您的瀏覽器不支援地理定位功能。"); }
                 setTrackingState();
-                watchId = navigator.geolocation.watchPosition(handlePositionUpdate, handleLocationError, { enableHighAccuracy: true });
-            } else { // 結束
+                watchId = navigator.geolocation.watchPosition(handlePositionUpdate, handleLocationError, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+            } else {
                 if (watchId !== null) navigator.geolocation.clearWatch(watchId);
-                if (isCurrentlyStopped) toggleManualStop(true); // 強制結束最後的停留
+                if (isCurrentlyStopped) toggleManualStop(true);
                 setStoppedState();
             }
         }
 
         function toggleManualStop(isEndingSession = false) {
             if (!isTracking) return;
+
             if (!isCurrentlyStopped) { // 開始停留
-                isCurrentlyStopped = true;
-                statusSpan.textContent = '狀態: 停留中';
-                markStopBtn.textContent = '結束停留';
-                navigator.geolocation.getCurrentPosition(pos => {
-                    const { latitude, longitude } = pos.coords;
-                    manualStopInfo = { lat: latitude, lng: longitude, startTime: new Date(), stopIndex: logData.filter(l => l.type === '停留結束').length + 1 };
-                    const log = { type: '停留開始', time: manualStopInfo.startTime, lat: latitude, lng: longitude };
-                    addLog(log, 'stop-start');
-                    manualStopInfo.marker = L.marker([latitude, longitude]).addTo(map)
-                        .bindPopup(`<b>停留點 ${manualStopInfo.stopIndex} (進行中)</b><br>開始: ${formatTime(manualStopInfo.startTime)}`).openPopup();
-                    map.panTo([latitude, longitude]);
-                }, handleLocationError);
+                markStopBtn.disabled = true;
+                markStopBtn.textContent = '定位中...';
+                addLog({ type: '系統', message: '正在獲取停留點位置...' }, 'info');
+
+                navigator.geolocation.getCurrentPosition(
+                    (pos) => {
+                        isCurrentlyStopped = true;
+                        statusSpan.textContent = '狀態: 停留中';
+                        markStopBtn.textContent = '結束停留';
+                        markStopBtn.disabled = false;
+
+                        const { latitude, longitude } = pos.coords;
+                        manualStopInfo = { lat: latitude, lng: longitude, startTime: new Date(), stopIndex: logData.filter(l => l.type === '停留結束').length + 1 };
+                        const log = { type: '停留開始', time: manualStopInfo.startTime, lat: latitude, lng: longitude };
+                        addLog(log, 'stop-start');
+                        manualStopInfo.marker = L.marker([latitude, longitude]).addTo(map)
+                            .bindPopup(`<b>停留點 ${manualStopInfo.stopIndex} (進行中)</b><br>開始: ${formatTime(manualStopInfo.startTime)}`).openPopup();
+                        map.panTo([latitude, longitude]);
+                    },
+                    (err) => {
+                        addLog({ type: '錯誤', message: `無法獲取停留點位置: ${err.message}` }, 'error');
+                        markStopBtn.disabled = false;
+                        markStopBtn.textContent = '標記停留';
+                    },
+                    { enableHighAccuracy: true, timeout: 10000 }
+                );
             } else { // 結束停留
                 const endTime = new Date();
                 const durationMs = endTime - manualStopInfo.startTime;
@@ -183,20 +194,25 @@
             }
         }
 
+        // *** 核心修正：handlePositionUpdate ***
         function handlePositionUpdate(position) {
             const { latitude, longitude } = position.coords;
-            coordControl.update(latitude, longitude); // 更新座標顯示
-            if (isCurrentlyStopped) return;
-
             const now = new Date();
             const point = { lat: latitude, lng: longitude, time: now };
+
+            // 1. 無論如何，都更新底層數據和地圖顯示
+            coordControl.update(latitude, longitude); // 更新實時座標
             if (trackPoints.length === 0) {
                 logList.innerHTML = '';
                 map.setView([latitude, longitude], 16);
             }
-            trackPoints.push(point);
-            updateMap(point);
-            addLog({ type: '移動', time: now, lat: latitude, lng: longitude });
+            trackPoints.push(point); // 存儲數據點
+            updateMap(); // 更新地圖軌跡線
+
+            // 2. 只有在非停留狀態下，才在UI上新增「移動」日誌
+            if (!isCurrentlyStopped) {
+                addLog({ type: '移動', time: now, lat: latitude, lng: longitude });
+            }
         }
 
         // --- 狀態管理 ---
@@ -230,10 +246,10 @@
 
         // --- 匯出功能 ---
         function exportCSV() {
-            let csvContent = "\uFEFF"; // 新增：UTF-8 BOM for Excel
+            let csvContent = "\uFEFF";
             csvContent += "類型,日期,時間,緯度,經度,停留時長(秒),備註\n";
             logData.forEach(log => {
-                const time = log.time ? log.time.toLocaleTimeString('zh-TW') : '';
+                const time = log.time ? log.time.toLocaleTimeString('zh-TW', { hour12: false }) : '';
                 const date = log.time ? log.time.toLocaleDateString('zh-TW') : '';
                 const lat = log.lat ? log.lat.toFixed(6) : '';
                 const lng = log.lng ? log.lng.toFixed(6) : '';
@@ -244,18 +260,15 @@
                 } else if (log.type === '停留開始') {
                     note = `停留點 ${log.stopIndex} 開始`;
                 }
-                if(log.type !== 'Info') {
+                if(log.type !== 'Info' && log.type !== '系統' && log.type !== '錯誤') {
                     csvContent += `${log.type},${date},${time},${lat},${lng},${durationSec},${note}\n`;
                 }
             });
             triggerDownload(csvContent, '軌跡記錄.csv', 'text/csv;charset=utf-8;');
         }
-
         function exportGPX() {
             let gpxContent = `<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="Professional Tracker" xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">\n`;
-            
-            // 新增：寫入航點 (停留點)
+<gpx version="1.1" creator="Continuous Tracker v6" xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">\n`;
             logData.filter(log => log.type === '停留結束').forEach(log => {
                 gpxContent += `  <wpt lat="${log.lat}" lon="${log.lng}">\n`;
                 gpxContent += `    <time>${log.startTime.toISOString()}</time>\n`;
@@ -263,16 +276,13 @@
                 gpxContent += `    <desc>停留時長: ${log.duration}</desc>\n`;
                 gpxContent += `  </wpt>\n`;
             });
-
-            // 寫入軌跡
-            gpxContent += `  <trk>\n    <name>軌跡記錄</name>\n    <trkseg>\n`;
+            gpxContent += `  <trk>\n    <name>軌跡記錄 (不間斷)</name>\n    <trkseg>\n`;
             trackPoints.forEach(p => {
                 gpxContent += `      <trkpt lat="${p.lat}" lon="${p.lng}"><time>${p.time.toISOString()}</time></trkpt>\n`;
             });
             gpxContent += `    </trkseg>\n  </trk>\n</gpx>`;
             triggerDownload(gpxContent, '軌跡路線.gpx', 'application/gpx+xml');
         }
-
         function exportPNG() {
             leafletImage(map, function(err, canvas) {
                 if(err) { return alert('匯出圖片失敗：' + err); }
@@ -281,12 +291,14 @@
         }
 
         // --- 輔助函式 ---
-        function updateMap(point) {
+        function updateMap() {
             const pathPoints = trackPoints.map(p => [p.lat, p.lng]);
             if (!polyline) {
                 polyline = L.polyline(pathPoints, { color: 'blue' }).addTo(map);
             } else { polyline.setLatLngs(pathPoints); }
-            map.panTo([point.lat, point.lng]);
+            if (trackPoints.length > 0) {
+                map.panTo(pathPoints[pathPoints.length - 1]);
+            }
         }
         function addLog(log, className = '') {
             logData.push(log);
@@ -311,7 +323,9 @@
             a.download = fileName;
             document.body.appendChild(a); a.click(); document.body.removeChild(a);
         }
-        function handleLocationError(error) { alert(`定位錯誤: ${error.message}`); if (isTracking) toggleTracking(); }
+        function handleLocationError(error) {
+            addLog({ type: '錯誤', message: `持續定位失敗: ${error.message}` }, 'error');
+        }
         function formatTime(date) { return date.toLocaleTimeString('zh-TW', { hour12: false }); }
         function formatDuration(ms) {
             let s = Math.floor(ms / 1000); let m = Math.floor(s / 60); let h = Math.floor(m / 60);
